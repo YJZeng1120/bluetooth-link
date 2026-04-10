@@ -7,18 +7,21 @@ class TrackedDeviceState {
   final BleDevice device;
   final bool isLost;
   final DateTime? lastSeen;
+  final int? previousRssi;
 
   const TrackedDeviceState({
     required this.device,
     this.isLost = false,
     this.lastSeen,
+    this.previousRssi,
   });
 
-  TrackedDeviceState copyWith({BleDevice? device, bool? isLost, DateTime? lastSeen}) {
+  TrackedDeviceState copyWith({BleDevice? device, bool? isLost, DateTime? lastSeen, int? previousRssi}) {
     return TrackedDeviceState(
       device: device ?? this.device,
       isLost: isLost ?? this.isLost,
       lastSeen: lastSeen ?? this.lastSeen,
+      previousRssi: previousRssi ?? this.previousRssi,
     );
   }
 }
@@ -68,6 +71,7 @@ class TrackingNotifier extends ChangeNotifier {
       device: prev.device.copyWith(rssi: scanned.rssi),
       isLost: false,
       lastSeen: DateTime.now(),
+      previousRssi: prev.device.rssi,
     );
     if (wasLost) notifyListeners(); // 恢復時通知
     notifyListeners();

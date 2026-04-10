@@ -6,7 +6,7 @@ import '../bluetooth/ble_device.dart';
 import '../bluetooth/bluetooth_service.dart';
 import '../tracking/device_repository.dart';
 import '../tracking/tracking_notifier.dart';
-import '../widgets/signal_bar.dart';
+import '../widgets/signal_bar.dart' show SignalBar, rssiToLabel, rssiTrend;
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -95,7 +95,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('藍牙防丟失'),
+        title: const Text('藍牙雷達'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
@@ -130,6 +130,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 return _TrackedDeviceTile(
                   device: state.device.copyWith(rssi: rssi),
                   isLost: state.isLost,
+                  previousRssi: state.previousRssi,
                   onRemove: () {
                     _alertedLostIds.remove(state.device.id);
                     _trackingNotifier.removeDevice(state.device.id);
@@ -191,9 +192,10 @@ class _SectionHeader extends StatelessWidget {
 class _TrackedDeviceTile extends StatelessWidget {
   final BleDevice device;
   final bool isLost;
+  final int? previousRssi;
   final VoidCallback onRemove;
 
-  const _TrackedDeviceTile({required this.device, required this.isLost, required this.onRemove});
+  const _TrackedDeviceTile({required this.device, required this.isLost, required this.onRemove, this.previousRssi});
 
   @override
   Widget build(BuildContext context) {
@@ -204,7 +206,7 @@ class _TrackedDeviceTile extends StatelessWidget {
       title: Text(device.displayName),
       subtitle: isLost
           ? const Text('訊號消失', style: TextStyle(color: Colors.red))
-          : Text('${device.rssi} dBm  ·  ${device.shortId}'),
+          : Text('訊號 ${rssiToLabel(device.rssi)} (${device.rssi} dBm)${rssiTrend(previousRssi, device.rssi)}  ·  ${device.shortId}'),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -234,7 +236,7 @@ class _NearbyDeviceTile extends StatelessWidget {
       title: Text(device.displayName),
       subtitle: Text(
         [
-          '${device.rssi} dBm',
+          '訊號 ${rssiToLabel(device.rssi)} (${device.rssi} dBm)',
           device.shortId,
           if (device.typeHint != null && device.name.isEmpty) device.typeHint!,
         ].join('  ·  '),

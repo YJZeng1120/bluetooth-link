@@ -1,5 +1,23 @@
 import 'package:flutter/material.dart';
 
+// RSSI → 人類可讀標籤
+String rssiToLabel(int rssi) {
+  if (rssi >= -60) return '非常近';
+  if (rssi >= -70) return '近';
+  if (rssi >= -80) return '普通';
+  if (rssi >= -90) return '遠';
+  return '很遠';
+}
+
+// RSSI 趨勢：前後差距超過 3 dBm 才算有變化，避免雜訊
+String rssiTrend(int? previousRssi, int currentRssi) {
+  if (previousRssi == null) return '';
+  final diff = currentRssi - previousRssi;
+  if (diff > 3) return ' ↑';
+  if (diff < -3) return ' ↓';
+  return '';
+}
+
 // RSSI → 訊號格數（0–4）
 int rssiToLevel(int rssi) {
   if (rssi >= -60) return 4;
