@@ -1,5 +1,7 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
+
 import '../bluetooth/ble_device.dart';
 import '../bluetooth/bluetooth_service.dart';
 import '../tracking/device_repository.dart';
@@ -36,9 +38,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final granted = await _bluetoothService.requestPermission();
     if (!granted) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('需要藍牙權限才能掃描裝置')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('需要藍牙權限才能掃描裝置')));
       }
       return;
     }
@@ -58,9 +58,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('無法啟動掃描：$e')),
-        );
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('無法啟動掃描：$e')));
       }
     }
   }
@@ -112,25 +110,19 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context, _) {
           final trackedStates = _trackingNotifier.trackedStates;
           final trackedIds = trackedStates.map((s) => s.device.id).toSet();
-          final nearbyUntracked = _nearbyDevices.values
-              .where((d) => !trackedIds.contains(d.id))
-              .toList()
-            ..sort((a, b) => b.rssi.compareTo(a.rssi));
+          final nearbyUntracked =
+              _nearbyDevices.values
+                  .where((d) => !trackedIds.contains(d.id) && d.name.isNotEmpty)
+                  .toList()
+                ..sort((a, b) => b.rssi.compareTo(a.rssi));
 
           return ListView(
             children: [
-              // ── 我的裝置 ──────────────────────────────────────────────────
-              _SectionHeader(
-                title: '我的裝置',
-                subtitle: '${trackedStates.length} 個裝置',
-              ),
+              _SectionHeader(title: '我的裝置', subtitle: '${trackedStates.length} 個裝置'),
               if (trackedStates.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  child: Text(
-                    '尚未加入追蹤裝置。從附近裝置列表中加入。',
-                    style: TextStyle(color: Colors.grey),
-                  ),
+                  child: Text('尚未加入追蹤裝置。從附近裝置列表中加入。', style: TextStyle(color: Colors.grey)),
                 ),
               ...trackedStates.map((state) {
                 final liveDevice = _nearbyDevices[state.device.id];
@@ -146,7 +138,6 @@ class _HomeScreenState extends State<HomeScreen> {
               }),
               const Divider(height: 1),
 
-              // ── 附近裝置 ──────────────────────────────────────────────────
               _SectionHeader(
                 title: '附近裝置',
                 subtitle: _isScanning ? '掃描中... ${nearbyUntracked.length} 個' : '已停止',
@@ -156,10 +147,12 @@ class _HomeScreenState extends State<HomeScreen> {
                   padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: Text('掃描中，尚未發現裝置...', style: TextStyle(color: Colors.grey)),
                 ),
-              ...nearbyUntracked.map((device) => _NearbyDeviceTile(
-                    device: device,
-                    onAdd: () => _trackingNotifier.addDevice(device),
-                  )),
+              ...nearbyUntracked.map(
+                (device) => _NearbyDeviceTile(
+                  device: device,
+                  onAdd: () => _trackingNotifier.addDevice(device),
+                ),
+              ),
             ],
           );
         },
@@ -167,8 +160,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 }
-
-// ─── 區段標題 ─────────────────────────────────────────────────────────────────
 
 class _SectionHeader extends StatelessWidget {
   final String title;
@@ -182,27 +173,27 @@ class _SectionHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
       child: Row(
         children: [
-          Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+          ),
           const SizedBox(width: 8),
-          Text(subtitle, style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey)),
+          Text(
+            subtitle,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+          ),
         ],
       ),
     );
   }
 }
 
-// ─── 追蹤裝置 tile ────────────────────────────────────────────────────────────
-
 class _TrackedDeviceTile extends StatelessWidget {
   final BleDevice device;
   final bool isLost;
   final VoidCallback onRemove;
 
-  const _TrackedDeviceTile({
-    required this.device,
-    required this.isLost,
-    required this.onRemove,
-  });
+  const _TrackedDeviceTile({required this.device, required this.isLost, required this.onRemove});
 
   @override
   Widget build(BuildContext context) {
@@ -230,8 +221,6 @@ class _TrackedDeviceTile extends StatelessWidget {
   }
 }
 
-// ─── 附近裝置 tile ────────────────────────────────────────────────────────────
-
 class _NearbyDeviceTile extends StatelessWidget {
   final BleDevice device;
   final VoidCallback onAdd;
@@ -243,11 +232,13 @@ class _NearbyDeviceTile extends StatelessWidget {
     return ListTile(
       leading: const Icon(Icons.bluetooth, color: Colors.grey),
       title: Text(device.displayName),
-      subtitle: Text([
-        '${device.rssi} dBm',
-        device.shortId,
-        if (device.typeHint != null && device.name.isEmpty) device.typeHint!,
-      ].join('  ·  ')),
+      subtitle: Text(
+        [
+          '${device.rssi} dBm',
+          device.shortId,
+          if (device.typeHint != null && device.name.isEmpty) device.typeHint!,
+        ].join('  ·  '),
+      ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [

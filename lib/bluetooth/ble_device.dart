@@ -45,7 +45,9 @@ class BleDevice {
   // 根據 service UUID 猜測裝置類型
   String? get typeHint {
     for (final uuid in serviceUuids) {
-      final short = uuid.toLowerCase().replaceAll('-', '').substring(0, 8);
+      final normalized = uuid.toLowerCase().replaceAll('-', '');
+      if (normalized.length < 8) continue;
+      final short = normalized.substring(0, 8);
       if (_serviceTypeHints.containsKey(short)) return _serviceTypeHints[short];
     }
     return null;

@@ -1,6 +1,7 @@
 package com.example.bluetooth_link
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
@@ -24,171 +25,148 @@ class MainActivity : FlutterActivity() {
     private var isScanning = false
 
     private val bluetoothAdapter: BluetoothAdapter? by lazy {
-        val manager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        manager.adapter
+        (getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager).adapter
     }
 
-    // BLE ScanCallback：掃描到裝置時推送到 EventSink
+
+    private fun ensureScanPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_SCAN
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    private fun requestPermission(result: MethodChannel.Result) {
+        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+        val granted = permissions.all {
+            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+        }
+
+        if (granted) {
+            result.success(true)
+            return
+        }
+
+        ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE)
+        result.success(false)
+    }
+
+    private fun getDeviceName(result: ScanResult): String {
+        val recordName = result.scanRecord?.deviceName
+        if (!recordName.isNullOrEmpty()) return recordName
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val hasPerm = ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.BLUETOOTH_CONNECT
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (hasPerm) result.device.name ?: "" else ""
+        } else {
+            result.device.name ?: ""
+        }
+    }
+
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            // 只處理可連線的裝置（API 26+），過濾掉 beacon / Nearby Share 等廣播
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !result.isConnectable) return
 
-            val device = result.device
-            val hasConnectPerm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                ActivityCompat.checkSelfPermission(
-                    this@MainActivity, Manifest.permission.BLUETOOTH_CONNECT
-                ) == PackageManager.PERMISSION_GRANTED
-            } else true
-
-            // scanRecord?.deviceName 通常比 device.name 更即時
-            val name = result.scanRecord?.deviceName
-                ?: if (hasConnectPerm) device.name else null
-
-            // 擷取 service UUID 清單（幫助識別裝置類型）
-            val serviceUuids = result.scanRecord?.serviceUuids
-                ?.map { it.toString() } ?: emptyList<String>()
-
             val data = mapOf(
-                "id" to device.address,
-                "name" to (name ?: ""),
-                "rssi" to result.rssi,
-                "serviceUuids" to serviceUuids
+                "id" to result.device.address,
+                "name" to getDeviceName(result),
+                "rssi" to result.rssi
             )
-            runOnUiThread {
-                eventSink?.success(data)
-            }
+
+            eventSink?.success(data)
         }
 
         override fun onScanFailed(errorCode: Int) {
-            runOnUiThread {
-                eventSink?.error("SCAN_FAILED", "BLE scan failed with error code $errorCode", null)
-            }
+            eventSink?.error("SCAN_FAILED", "error: $errorCode", null)
         }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        setupMethodChannel(flutterEngine)
-        setupEventChannel(flutterEngine)
-    }
 
-    // ─── MethodChannel 設定 ───────────────────────────────────────────────────
-
-    private fun setupMethodChannel(flutterEngine: FlutterEngine) {
-        MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            METHOD_CHANNEL
-        ).setMethodCallHandler { call, result ->
-            when (call.method) {
-                "getBluetoothState" -> result.success(getBluetoothState())
-                "requestPermission" -> requestPermission(result)
-                "startScan" -> startScan(result)
-                "stopScan" -> {
-                    stopScan()
-                    result.success(null)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getBluetoothState" -> result.success(getBluetoothState())
+                    "requestPermission" -> requestPermission(result)
+                    "startScan" -> startScan(result)
+                    "stopScan" -> {
+                        stopScan()
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
                 }
-                else -> result.notImplemented()
             }
-        }
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
+                    eventSink = sink
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    stopScan()
+                    eventSink = null
+                }
+            })
     }
 
-    // 回傳 "on" / "off" / "unavailable"
+
+
     private fun getBluetoothState(): String {
         val adapter = bluetoothAdapter ?: return "unavailable"
         return if (adapter.isEnabled) "on" else "off"
     }
 
-    // 請求 BLE 相關權限，回傳是否已全部授權
-    private fun requestPermission(result: MethodChannel.Result) {
-        val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
-            )
-        } else {
-            arrayOf(
-                Manifest.permission.BLUETOOTH,
-                Manifest.permission.BLUETOOTH_ADMIN,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
-        }
 
-        val allGranted = permissions.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
 
-        if (allGranted) {
-            result.success(true)
-        } else {
-            ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE)
-            // 回傳目前狀態（用戶可能剛授權），下次呼叫才會是 true
-            result.success(false)
-        }
-    }
-
-    // 啟動 BLE 掃描
+    @SuppressLint("MissingPermission")
     private fun startScan(result: MethodChannel.Result) {
         val adapter = bluetoothAdapter
+
         if (adapter == null || !adapter.isEnabled) {
-            result.error("BLUETOOTH_OFF", "Bluetooth is not enabled", null)
+            result.error("BT_OFF", "Bluetooth is not enabled", null)
             return
         }
 
-        val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ContextCompat.checkSelfPermission(
-                this, Manifest.permission.BLUETOOTH_SCAN
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            ContextCompat.checkSelfPermission(
-                this, Manifest.permission.ACCESS_FINE_LOCATION
-            ) == PackageManager.PERMISSION_GRANTED
-        }
-
-        if (!hasPermission) {
-            result.error("PERMISSION_DENIED", "Bluetooth scan permission not granted", null)
+        if (!ensureScanPermission()) {
+            result.error("NO_PERMISSION", "Permission not granted", null)
             return
         }
 
-        if (!isScanning) {
-            adapter.bluetoothLeScanner?.startScan(scanCallback)
-            isScanning = true
+        if (isScanning) {
+            result.success(null)
+            return
         }
+
+        adapter.bluetoothLeScanner?.startScan(scanCallback)
+        isScanning = true
+
         result.success(null)
     }
 
-    // 停止 BLE 掃描
+    @SuppressLint("MissingPermission")
     private fun stopScan() {
-        if (isScanning) {
-            val hasPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                ContextCompat.checkSelfPermission(
-                    this, Manifest.permission.BLUETOOTH_SCAN
-                ) == PackageManager.PERMISSION_GRANTED
-            } else true
-
-            if (hasPermission) {
-                bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
-            }
-            isScanning = false
-        }
-    }
-
-    // ─── EventChannel 設定 ───────────────────────────────────────────────────
-
-    private fun setupEventChannel(flutterEngine: FlutterEngine) {
-        EventChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            EVENT_CHANNEL
-        ).setStreamHandler(object : EventChannel.StreamHandler {
-            override fun onListen(arguments: Any?, sink: EventChannel.EventSink) {
-                eventSink = sink
-            }
-
-            override fun onCancel(arguments: Any?) {
-                stopScan()
-                eventSink = null
-            }
-        })
+        if (!isScanning) return
+        bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        isScanning = false
     }
 
     companion object {
