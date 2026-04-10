@@ -66,14 +66,12 @@ class TrackingNotifier extends ChangeNotifier {
   void onScanResult(BleDevice scanned) {
     if (!_states.containsKey(scanned.id)) return;
     final prev = _states[scanned.id]!;
-    final wasLost = prev.isLost;
     _states[scanned.id] = prev.copyWith(
       device: prev.device.copyWith(rssi: scanned.rssi),
       isLost: false,
       lastSeen: DateTime.now(),
       previousRssi: prev.device.rssi,
     );
-    if (wasLost) notifyListeners(); // 恢復時通知
     notifyListeners();
   }
 

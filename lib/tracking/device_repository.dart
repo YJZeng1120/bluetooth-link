@@ -10,7 +10,7 @@ class DeviceRepository {
     final jsonList = prefs.getStringList(_key) ?? [];
     return jsonList.map((json) {
       final map = jsonDecode(json) as Map<String, dynamic>;
-      return BleDevice(id: map['id'], name: map['name'], rssi: 0);
+      return BleDevice(id: map['id'], name: map['name']);
     }).toList();
   }
 

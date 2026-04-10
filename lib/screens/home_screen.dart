@@ -114,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen> {
               _nearbyDevices.values
                   .where((d) => !trackedIds.contains(d.id) && d.name.isNotEmpty)
                   .toList()
-                ..sort((a, b) => b.rssi.compareTo(a.rssi));
+                ..sort((a, b) => (b.rssi ?? -999).compareTo(a.rssi ?? -999));
 
           return ListView(
             children: [
@@ -125,10 +125,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Text('尚未加入追蹤裝置。從附近裝置列表中加入。', style: TextStyle(color: Colors.grey)),
                 ),
               ...trackedStates.map((state) {
-                final liveDevice = _nearbyDevices[state.device.id];
-                final rssi = liveDevice?.rssi ?? state.device.rssi;
                 return _TrackedDeviceTile(
-                  device: state.device.copyWith(rssi: rssi),
+                  device: state.device,
                   isLost: state.isLost,
                   previousRssi: state.previousRssi,
                   onRemove: () {
@@ -206,11 +204,13 @@ class _TrackedDeviceTile extends StatelessWidget {
       title: Text(device.displayName),
       subtitle: isLost
           ? const Text('訊號消失', style: TextStyle(color: Colors.red))
-          : Text('訊號 ${rssiToLabel(device.rssi)} (${device.rssi} dBm)${rssiTrend(previousRssi, device.rssi)}  ·  ${device.shortId}'),
+          : device.rssi == null
+              ? const Text('尚未偵測', style: TextStyle(color: Colors.grey))
+              : Text('訊號 ${rssiToLabel(device.rssi)} (${device.rssi} dBm)${rssiTrend(previousRssi, device.rssi)}  ·  ${device.shortId}'),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!isLost) SignalBar(rssi: device.rssi),
+          if (!isLost && device.rssi != null) SignalBar(rssi: device.rssi),
           const SizedBox(width: 8),
           IconButton(
             icon: const Icon(Icons.remove_circle_outline, color: Colors.grey),
@@ -236,7 +236,7 @@ class _NearbyDeviceTile extends StatelessWidget {
       title: Text(device.displayName),
       subtitle: Text(
         [
-          '訊號 ${rssiToLabel(device.rssi)} (${device.rssi} dBm)',
+          '訊號 ${rssiToLabel(device.rssi)} (${device.rssi ?? '—'} dBm)',
           device.shortId,
           if (device.typeHint != null && device.name.isEmpty) device.typeHint!,
         ].join('  ·  '),

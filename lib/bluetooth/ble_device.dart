@@ -13,13 +13,13 @@ const _serviceTypeHints = {
 class BleDevice {
   final String id;
   final String name;
-  final int rssi;
+  final int? rssi;
   final List<String> serviceUuids;
 
   const BleDevice({
     required this.id,
     required this.name,
-    required this.rssi,
+    this.rssi,
     this.serviceUuids = const [],
   });
 

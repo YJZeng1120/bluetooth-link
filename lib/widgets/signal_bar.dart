@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 
 // RSSI → 人類可讀標籤
-String rssiToLabel(int rssi) {
+String rssiToLabel(int? rssi) {
+  if (rssi == null) return '—';
   if (rssi >= -60) return '非常近';
   if (rssi >= -70) return '近';
   if (rssi >= -80) return '普通';
@@ -10,8 +11,8 @@ String rssiToLabel(int rssi) {
 }
 
 // RSSI 趨勢：前後差距超過 3 dBm 才算有變化，避免雜訊
-String rssiTrend(int? previousRssi, int currentRssi) {
-  if (previousRssi == null) return '';
+String rssiTrend(int? previousRssi, int? currentRssi) {
+  if (previousRssi == null || currentRssi == null) return '';
   final diff = currentRssi - previousRssi;
   if (diff > 3) return ' ↑';
   if (diff < -3) return ' ↓';
@@ -19,7 +20,8 @@ String rssiTrend(int? previousRssi, int currentRssi) {
 }
 
 // RSSI → 訊號格數（0–4）
-int rssiToLevel(int rssi) {
+int rssiToLevel(int? rssi) {
+  if (rssi == null) return 0;
   if (rssi >= -60) return 4;
   if (rssi >= -70) return 3;
   if (rssi >= -80) return 2;
@@ -28,7 +30,7 @@ int rssiToLevel(int rssi) {
 }
 
 class SignalBar extends StatelessWidget {
-  final int rssi;
+  final int? rssi;
   final double barWidth;
   final double maxBarHeight;
 
