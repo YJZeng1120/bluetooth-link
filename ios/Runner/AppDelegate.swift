@@ -2,17 +2,48 @@ import CoreBluetooth
 import Flutter
 import UIKit
 
+// Separate stream handler for the BT state channel.
+// AppDelegate already conforms to FlutterStreamHandler for the scan channel,
+// so we can't reuse the same conformance.
+private class StateStreamHandler: NSObject, FlutterStreamHandler {
+    var eventSink: FlutterEventSink?
+    // Called on subscribe — lets AppDelegate push the current state immediately
+    var onListenCallback: ((FlutterEventSink) -> Void)?
+
+    func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+        eventSink = events
+        onListenCallback?(events)
+        return nil
+    }
+
+    func onCancel(withArguments arguments: Any?) -> FlutterError? {
+        eventSink = nil
+        return nil
+    }
+}
+
 @main
 @objc class AppDelegate: FlutterAppDelegate {
 
     private let methodChannelName = "bluetooth/control"
     private let eventChannelName = "bluetooth/scan"
+    private let stateChannelName = "bluetooth/state"
 
     private var centralManager: CBCentralManager?
     private var eventSink: FlutterEventSink?
 
-    // startScan 在 CBCentralManager 還未 poweredOn 時的 pending result
+    private lazy var stateHandler: StateStreamHandler = {
+        let handler = StateStreamHandler()
+        handler.onListenCallback = { [weak self] sink in
+            sink(self?.getBluetoothState() ?? "unavailable")
+        }
+        return handler
+    }()
+
+    // startScan called before CBCentralManager reaches poweredOn
     private var pendingStartScanResult: FlutterResult?
+    // requestPermission called before user responds to the system BT dialog
+    private var pendingPermissionResult: FlutterResult?
 
     override func application(
         _ application: UIApplication,
@@ -26,11 +57,12 @@ import UIKit
 
         setupMethodChannel(controller: controller)
         setupEventChannel(controller: controller)
+        setupStateChannel(controller: controller)
 
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
     }
 
-    // ─── MethodChannel 設定 ───────────────────────────────────────────────────
+    // ─── MethodChannel ───────────────────────────────────────────────────────
 
     private func setupMethodChannel(controller: FlutterViewController) {
         let channel = FlutterMethodChannel(
@@ -43,7 +75,7 @@ import UIKit
             case "getBluetoothState":
                 result(self.getBluetoothState())
             case "requestPermission":
-                result(self.getPermissionStatus())
+                self.handlePermissionRequest(result: result)
             case "startScan":
                 self.startScan(result: result)
             case "stopScan":
@@ -55,10 +87,8 @@ import UIKit
         }
     }
 
-    // 回傳 "on" / "off" / "unavailable"
     private func getBluetoothState() -> String {
         guard let manager = centralManager else {
-            // 初始化 CBCentralManager 會觸發系統權限請求
             centralManager = CBCentralManager(delegate: self, queue: nil)
             return "unavailable"
         }
@@ -69,7 +99,6 @@ import UIKit
         }
     }
 
-    // 回傳目前授權狀態（初始化 CBCentralManager 會觸發系統授權對話框）
     private func getPermissionStatus() -> Bool {
         if centralManager == nil {
             centralManager = CBCentralManager(delegate: self, queue: nil)
@@ -80,7 +109,28 @@ import UIKit
         return true
     }
 
-    // 啟動 BLE 掃描（若還未 poweredOn 則 pending）
+    private func handlePermissionRequest(result: @escaping FlutterResult) {
+        if centralManager == nil {
+            centralManager = CBCentralManager(delegate: self, queue: nil)
+        }
+        if #available(iOS 13.1, *) {
+            switch CBCentralManager.authorization {
+            case .allowedAlways:
+                result(true)
+            case .denied, .restricted:
+                result(false)
+            case .notDetermined:
+                // System dialog will appear; complete the result once the manager
+                // transitions to a definitive state in centralManagerDidUpdateState.
+                pendingPermissionResult = result
+            @unknown default:
+                result(false)
+            }
+        } else {
+            result(true)
+        }
+    }
+
     private func startScan(result: @escaping FlutterResult) {
         if centralManager == nil {
             centralManager = CBCentralManager(delegate: self, queue: nil)
@@ -97,18 +147,16 @@ import UIKit
         } else if manager.state == .poweredOff {
             result(FlutterError(code: "BLUETOOTH_OFF", message: "Bluetooth is not enabled", details: nil))
         } else {
-            // 還在初始化，等待 centralManagerDidUpdateState 再掃描
             pendingStartScanResult = result
         }
     }
 
-    // 停止 BLE 掃描
     private func stopScan() {
         centralManager?.stopScan()
         pendingStartScanResult = nil
     }
 
-    // ─── EventChannel 設定 ───────────────────────────────────────────────────
+    // ─── EventChannel (scan results) ─────────────────────────────────────────
 
     private func setupEventChannel(controller: FlutterViewController) {
         let channel = FlutterEventChannel(
@@ -117,6 +165,16 @@ import UIKit
         )
         channel.setStreamHandler(self)
     }
+
+    // ─── EventChannel (BT state changes) ─────────────────────────────────────
+
+    private func setupStateChannel(controller: FlutterViewController) {
+        let channel = FlutterEventChannel(
+            name: stateChannelName,
+            binaryMessenger: controller.binaryMessenger
+        )
+        channel.setStreamHandler(stateHandler)
+    }
 }
 
 // ─── CBCentralManagerDelegate ─────────────────────────────────────────────────
@@ -124,8 +182,32 @@ import UIKit
 extension AppDelegate: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        // Push state change to Dart
+        let stateStr: String
+        switch central.state {
+        case .poweredOn:  stateStr = "on"
+        case .poweredOff: stateStr = "off"
+        default:          stateStr = "unavailable"
+        }
+        stateHandler.eventSink?(stateStr)
+
+        // Resolve a pending requestPermission call that was waiting for authorization
+        if let permResult = pendingPermissionResult {
+            switch central.state {
+            case .poweredOn, .poweredOff:
+                // Permission was granted (BT may be on or off, but access is allowed)
+                permResult(true)
+                pendingPermissionResult = nil
+            case .unauthorized:
+                permResult(false)
+                pendingPermissionResult = nil
+            default:
+                break // Still transitioning — wait for the next state update
+            }
+        }
+
+        // Resume any pending startScan call that arrived before BT was ready
         if central.state == .poweredOn, let pendingResult = pendingStartScanResult {
-            // 處理 pending 的 startScan 請求
             central.scanForPeripherals(withServices: nil, options: [
                 CBCentralManagerScanOptionAllowDuplicatesKey: true
             ])
@@ -134,22 +216,18 @@ extension AppDelegate: CBCentralManagerDelegate {
         }
     }
 
-    // 掃描到裝置：推送 { id, name, rssi } 至 EventSink
     func centralManager(
         _ central: CBCentralManager,
         didDiscover peripheral: CBPeripheral,
         advertisementData: [String: Any],
         rssi RSSI: NSNumber
     ) {
-        // 只處理可連線的裝置，過濾掉 beacon / AirDrop 等 non-connectable 廣播
         let isConnectable = advertisementData["kCBAdvDataIsConnectable"] as? Bool ?? false
         guard isConnectable else { return }
 
-        // advertisementData 裡的名稱比 peripheral.name 更即時且完整
         let advName = advertisementData[CBAdvertisementDataLocalNameKey] as? String
         let name = advName ?? peripheral.name ?? ""
 
-        // 擷取 service UUID 清單（可幫助識別裝置類型）
         let serviceUUIDs = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID])?
             .map { $0.uuidString } ?? []
 
@@ -165,7 +243,7 @@ extension AppDelegate: CBCentralManagerDelegate {
     }
 }
 
-// ─── FlutterStreamHandler ─────────────────────────────────────────────────────
+// ─── FlutterStreamHandler (scan channel) ─────────────────────────────────────
 
 extension AppDelegate: FlutterStreamHandler {
 
