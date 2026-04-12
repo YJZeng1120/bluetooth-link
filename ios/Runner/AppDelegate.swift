@@ -72,8 +72,6 @@ private class StateStreamHandler: NSObject, FlutterStreamHandler {
         channel.setMethodCallHandler { [weak self] call, result in
             guard let self = self else { return }
             switch call.method {
-            case "getBluetoothState":
-                result(self.getBluetoothState())
             case "requestPermission":
                 self.handlePermissionRequest(result: result)
             case "startScan":

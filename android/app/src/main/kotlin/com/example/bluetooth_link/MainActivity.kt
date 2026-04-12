@@ -122,7 +122,6 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "getBluetoothState" -> result.success(getBluetoothState())
                     "requestPermission" -> requestPermission(result)
                     "startScan" -> startScan(result)
                     "stopScan" -> {

@@ -8,11 +8,6 @@ class BluetoothService {
 
   // ─── MethodChannel 呼叫 ────────────────────────────────────────────────────
 
-  Future<String> getBluetoothState() async {
-    final state = await _methodChannel.invokeMethod<String>('getBluetoothState');
-    return state ?? 'unavailable';
-  }
-
   Future<bool> requestPermission() async {
     final granted = await _methodChannel.invokeMethod<bool>('requestPermission');
     return granted ?? false;

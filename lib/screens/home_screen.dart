@@ -1,214 +1,127 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../bluetooth/ble_device.dart';
-import '../bluetooth/bluetooth_service.dart';
-import '../tracking/device_repository.dart';
-import '../tracking/tracking_notifier.dart';
+import '../bluetooth/scan_providers.dart';
+import '../tracking/tracking_providers.dart';
 import '../widgets/signal_bar.dart' show SignalBar, rssiToLabel, rssiTrend;
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  final _bluetoothService = BluetoothService();
-  late final TrackingNotifier _trackingNotifier;
-
-  // 附近裝置的最新狀態（id → BleDevice）
-  final Map<String, BleDevice> _nearbyDevices = {};
-  // 每個附近裝置最後一次被掃到的時間，用於清除過期裝置
-  final Map<String, DateTime> _deviceLastSeen = {};
-
-  StreamSubscription<BleDevice>? _scanSubscription;
-  StreamSubscription<String>? _stateSubscription;
-  Timer? _cleanupTimer;
-
-  bool _isScanning = false;
-  String _bluetoothState = 'unavailable';
-  final Set<String> _alertedLostIds = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _trackingNotifier = TrackingNotifier(DeviceRepository());
-    _trackingNotifier.onDeviceLost = _onDeviceLost;
-    _trackingNotifier.load().then((_) => _initBluetooth());
-  }
-
-  Future<void> _initBluetooth() async {
-    // 先請求權限（Android 現在會真正等待使用者回應後才 return）
-    final granted = await _bluetoothService.requestPermission();
-    if (!granted) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('需要藍牙權限才能掃描裝置')),
-        );
-      }
-      return;
-    }
-
-    // 取得初始藍牙狀態，並訂閱後續狀態變化
-    _bluetoothState = await _bluetoothService.getBluetoothState();
-    if (mounted) setState(() {});
-
-    _stateSubscription = _bluetoothService.bluetoothStateStream.listen((state) {
-      if (!mounted) return;
-      setState(() => _bluetoothState = state);
-      if (state == 'on' && !_isScanning) {
-        _startScan();
-      } else if (state != 'on' && _isScanning) {
-        _stopScan();
-      }
-    });
-
-    // _stateSubscription receives the current state immediately on subscribe (both Android
-    // and iOS push it via onListen / onListenCallback), so _startScan() will be called
-    // from the callback above — no need to call it explicitly here.
-  }
-
-  Future<void> _startScan() async {
-    try {
-      await _bluetoothService.startScan();
-      setState(() => _isScanning = true);
-
-      _scanSubscription = _bluetoothService.scanResults.listen((device) {
-        setState(() {
-          _nearbyDevices[device.id] = device;
-          _deviceLastSeen[device.id] = DateTime.now();
-        });
-        _trackingNotifier.onScanResult(device);
-      });
-
-      // 每 10 秒清除超過 30 秒未出現的附近裝置
-      _cleanupTimer = Timer.periodic(const Duration(seconds: 10), (_) => _removeStaleDevices());
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('無法啟動掃描：$e')),
-        );
-      }
-    }
-  }
-
-  Future<void> _stopScan() async {
-    _cleanupTimer?.cancel();
-    _cleanupTimer = null;
-    await _scanSubscription?.cancel();
-    _scanSubscription = null;
-    await _bluetoothService.stopScan();
-    setState(() => _isScanning = false);
-  }
-
-  // 移除超過 30 秒沒有掃描到的附近裝置
-  void _removeStaleDevices() {
-    final cutoff = DateTime.now().subtract(const Duration(seconds: 30));
-    final staleIds = _deviceLastSeen.entries
-        .where((e) => e.value.isBefore(cutoff))
-        .map((e) => e.key)
-        .toList();
-    if (staleIds.isEmpty) return;
-    setState(() {
-      for (final id in staleIds) {
-        _nearbyDevices.remove(id);
-        _deviceLastSeen.remove(id);
-      }
-    });
-  }
-
-  void _onDeviceLost(BleDevice device) {
-    if (_alertedLostIds.contains(device.id)) return;
-    _alertedLostIds.add(device.id);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${device.displayName} 已超出範圍'),
-          backgroundColor: Colors.red.shade700,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
-  }
-
-  @override
-  void dispose() {
-    _cleanupTimer?.cancel();
-    _stateSubscription?.cancel();
-    _stopScan();
-    _trackingNotifier.dispose();
-    super.dispose();
-  }
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  // 本地 UI 狀態：記錄已彈過通知的裝置，避免重複提示
+  final _alertedLostIds = <String>{};
 
   @override
   Widget build(BuildContext context) {
+    // 偵測掃描錯誤（權限被拒、掃描失敗）
+    ref.listen<ScanState>(scanProvider, (prev, next) {
+      if (next.errorMessage != null &&
+          next.errorMessage != prev?.errorMessage) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(next.errorMessage!)));
+      }
+    });
+
+    // 偵測新增的 lost 裝置
+    ref.listen<List<TrackedDeviceState>>(trackingProvider, (_, next) {
+      for (final s in next) {
+        if (s.isLost && _alertedLostIds.add(s.device.id)) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${s.device.displayName} 已超出範圍'),
+              backgroundColor: Colors.red.shade700,
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    });
+
+    final scanState = ref.watch(scanProvider);
+    final trackedStates = ref.watch(trackingProvider);
+
+    final trackedIds = trackedStates.map((s) => s.device.id).toSet();
+    final nearbyUntracked =
+        scanState.nearbyDevices.values
+            .where((d) => !trackedIds.contains(d.id) && d.name.isNotEmpty)
+            .toList()
+          ..sort((a, b) => (b.rssi ?? -999).compareTo(a.rssi ?? -999));
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('藍牙雷達'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
           IconButton(
-            icon: Icon(_isScanning ? Icons.stop : Icons.play_arrow),
-            tooltip: _isScanning ? '停止掃描' : '開始掃描',
-            onPressed: _isScanning ? _stopScan : _startScan,
+            icon: Icon(scanState.isScanning ? Icons.stop : Icons.play_arrow),
+            tooltip: scanState.isScanning ? '停止掃描' : '開始掃描',
+            onPressed: scanState.isScanning
+                ? ref.read(scanProvider.notifier).stopScan
+                : ref.read(scanProvider.notifier).startScan,
           ),
         ],
       ),
       body: Column(
         children: [
-          if (_bluetoothState == 'off') _BluetoothOffBanner(),
+          if (scanState.bluetoothState == 'off') const _BluetoothOffBanner(),
           Expanded(
-            child: ListenableBuilder(
-              listenable: _trackingNotifier,
-              builder: (context, _) {
-                final trackedStates = _trackingNotifier.trackedStates;
-                final trackedIds = trackedStates.map((s) => s.device.id).toSet();
-                final nearbyUntracked = _nearbyDevices.values
-                    .where((d) => !trackedIds.contains(d.id) && d.name.isNotEmpty)
-                    .toList()
-                  ..sort((a, b) => (b.rssi ?? -999).compareTo(a.rssi ?? -999));
-
-                return ListView(
-                  children: [
-                    _SectionHeader(title: '我的裝置', subtitle: '${trackedStates.length} 個裝置'),
-                    if (trackedStates.isEmpty)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        child: Text('尚未加入追蹤裝置。從附近裝置列表中加入。', style: TextStyle(color: Colors.grey)),
-                      ),
-                    ...trackedStates.map((state) {
-                      return _TrackedDeviceTile(
-                        device: state.device,
-                        isLost: state.isLost,
-                        previousRssi: state.previousRssi,
-                        onRemove: () {
-                          _alertedLostIds.remove(state.device.id);
-                          _trackingNotifier.removeDevice(state.device.id);
-                        },
-                      );
-                    }),
-                    const Divider(height: 1),
-                    _SectionHeader(
-                      title: '附近裝置',
-                      subtitle: _isScanning ? '掃描中... ${nearbyUntracked.length} 個' : '已停止',
+            child: ListView(
+              children: [
+                _SectionHeader(
+                  title: '我的裝置',
+                  subtitle: '${trackedStates.length} 個裝置',
+                ),
+                if (trackedStates.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Text(
+                      '尚未加入追蹤裝置。從附近裝置列表中加入。',
+                      style: TextStyle(color: Colors.grey),
                     ),
-                    if (nearbyUntracked.isEmpty && _isScanning)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        child: Text('掃描中，尚未發現裝置...', style: TextStyle(color: Colors.grey)),
-                      ),
-                    ...nearbyUntracked.map(
-                      (device) => _NearbyDeviceTile(
-                        device: device,
-                        onAdd: () => _trackingNotifier.addDevice(device),
-                      ),
+                  ),
+                ...trackedStates.map(
+                  (s) => _TrackedDeviceTile(
+                    device: s.device,
+                    isLost: s.isLost,
+                    previousRssi: s.previousRssi,
+                    onRemove: () {
+                      _alertedLostIds.remove(s.device.id);
+                      ref
+                          .read(trackingProvider.notifier)
+                          .removeDevice(s.device.id);
+                    },
+                  ),
+                ),
+                const Divider(height: 1),
+                _SectionHeader(
+                  title: '附近裝置',
+                  subtitle: scanState.isScanning
+                      ? '掃描中... ${nearbyUntracked.length} 個'
+                      : '已停止',
+                ),
+                if (nearbyUntracked.isEmpty && scanState.isScanning)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    child: Text(
+                      '掃描中，尚未發現裝置...',
+                      style: TextStyle(color: Colors.grey),
                     ),
-                  ],
-                );
-              },
+                  ),
+                ...nearbyUntracked.map(
+                  (device) => _NearbyDeviceTile(
+                    device: device,
+                    onAdd: () =>
+                        ref.read(trackingProvider.notifier).addDevice(device),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -217,7 +130,11 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+// ── Private widgets ───────────────────────────────────────────────────────────
+
 class _BluetoothOffBanner extends StatelessWidget {
+  const _BluetoothOffBanner();
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -254,12 +171,16 @@ class _SectionHeader extends StatelessWidget {
         children: [
           Text(
             title,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
           ),
           const SizedBox(width: 8),
           Text(
             subtitle,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: Colors.grey),
           ),
         ],
       ),
@@ -273,7 +194,12 @@ class _TrackedDeviceTile extends StatelessWidget {
   final int? previousRssi;
   final VoidCallback onRemove;
 
-  const _TrackedDeviceTile({required this.device, required this.isLost, required this.onRemove, this.previousRssi});
+  const _TrackedDeviceTile({
+    required this.device,
+    required this.isLost,
+    required this.onRemove,
+    this.previousRssi,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -285,8 +211,11 @@ class _TrackedDeviceTile extends StatelessWidget {
       subtitle: isLost
           ? const Text('訊號消失', style: TextStyle(color: Colors.red))
           : device.rssi == null
-              ? const Text('尚未偵測', style: TextStyle(color: Colors.grey))
-              : Text('訊號 ${rssiToLabel(device.rssi)} (${device.rssi} dBm)${rssiTrend(previousRssi, device.rssi)}  ·  ${device.shortId}'),
+          ? const Text('尚未偵測', style: TextStyle(color: Colors.grey))
+          : Text(
+              '訊號 ${rssiToLabel(device.rssi)} (${device.rssi} dBm)'
+              '${rssiTrend(previousRssi, device.rssi)}  ·  ${device.shortId}',
+            ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
