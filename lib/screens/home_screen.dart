@@ -247,7 +247,6 @@ class _NearbyDeviceTile extends StatelessWidget {
         [
           '訊號 ${rssiToLabel(device.rssi)} (${device.rssi ?? '—'} dBm)',
           device.shortId,
-          if (device.typeHint != null && device.name.isEmpty) device.typeHint!,
         ].join('  ·  '),
       ),
       trailing: Row(
