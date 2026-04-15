@@ -85,28 +85,6 @@ private class StateStreamHandler: NSObject, FlutterStreamHandler {
         }
     }
 
-    private func getBluetoothState() -> String {
-        guard let manager = centralManager else {
-            centralManager = CBCentralManager(delegate: self, queue: nil)
-            return "unavailable"
-        }
-        switch manager.state {
-        case .poweredOn: return "on"
-        case .poweredOff: return "off"
-        default: return "unavailable"
-        }
-    }
-
-    private func getPermissionStatus() -> Bool {
-        if centralManager == nil {
-            centralManager = CBCentralManager(delegate: self, queue: nil)
-        }
-        if #available(iOS 13.1, *) {
-            return CBCentralManager.authorization == .allowedAlways
-        }
-        return true
-    }
-
     private func handlePermissionRequest(result: @escaping FlutterResult) {
         if centralManager == nil {
             centralManager = CBCentralManager(delegate: self, queue: nil)
@@ -172,6 +150,18 @@ private class StateStreamHandler: NSObject, FlutterStreamHandler {
             binaryMessenger: controller.binaryMessenger
         )
         channel.setStreamHandler(stateHandler)
+    }
+
+    private func getBluetoothState() -> String {
+        guard let manager = centralManager else {
+            centralManager = CBCentralManager(delegate: self, queue: nil)
+            return "unavailable"
+        }
+        switch manager.state {
+        case .poweredOn: return "on"
+        case .poweredOff: return "off"
+        default: return "unavailable"
+        }
     }
 }
 
